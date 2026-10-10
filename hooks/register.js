@@ -100,7 +100,13 @@ async function generate($, opts) {
   return { ok: true, path: outPath, base64: bytes.base64, duration, prompt }
 }
 
-export function register(on) {
+export function register(on, options) {
+  if (options && options.sa3_dir) config.sa3Dir = options.sa3_dir
+  if (options && options.model) config.model = options.model
+  if (options && options.device) config.device = options.device
+  if (options && options.encoding) config.encoding = options.encoding
+  if (options && options.duration != null) config.duration = Number(options.duration)
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'sfx',

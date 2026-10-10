@@ -30,14 +30,51 @@ cd sa3.cpp
 ./models.sh --variant small-sfx --encoding q5_k_m --ae-encoding q5_k_m
 ```
 
-## Install
+## Configure
+
+The mod needs `sa3_dir` set to your `sa3.cpp` checkout. Any of these work:
+
+### 1. Per-session flag (simplest, no files changed)
 
 ```bash
+claude --plugin-dir /Users/nkapila6/dev/cc-mod/sfx-gen
+```
+
+Then `/config`, find the `sfx-gen` rows, set `sa3_dir`. The value is stored in
+your settings and reused next session.
+
+### 2. Environment variable (works headless, `claude -p` too)
+
+```bash
+export SA3_CPP_DIR=/path/to/sa3.cpp
 claude --plugin-dir /path/to/sfx-gen
 ```
 
-On first enable, point the `sa3_dir` config at your `sa3.cpp` checkout. Or set
-`SA3_CPP_DIR` in the environment so the mod works headless (`claude -p`) too.
+`SA3_CPP_DIR` is read at generation time, so it must be exported in the same
+shell before launching Claude.
+
+### 3. Persistent install (always-on, no flag)
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/sfx-gen"
+  },
+  "pluginConfigs": {
+    "sfx-gen@inline": {
+      "options": {
+        "sa3_dir": "/path/to/sa3.cpp"
+      }
+    }
+  }
+}
+```
+
+`pluginConfigs` keys take the plugin name plus `@inline` for a
+`--plugin-dir`/`CLAUDE_CODE_PLUGIN_DIRS` load, and the config values go under
+`options`. With this, the mod loads in every session without a flag.
 
 ## Config
 
@@ -48,6 +85,16 @@ On first enable, point the `sa3_dir` config at your `sa3.cpp` checkout. Or set
 | `device` | `auto` | `auto`, `cpu`, or `metal` |
 | `encoding` | `q5_k_m` | Must match what `models.sh` fetched |
 | `duration` | `8` | Default clip length in seconds |
+
+## Usage
+
+```
+/sfx a whoosh across the screen
+/sfx footsteps on gravel --duration 6 --seed 42
+```
+
+Or ask Claude in natural language ("generate a sound effect of a metal impact")
+and it will call the `sfx` tool.
 
 ## License
 
