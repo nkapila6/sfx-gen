@@ -79,14 +79,21 @@ async function generate($, opts) {
   const init = { timeoutMs: 180000 }
   if (device === 'cpu') init.env = { SA3_DEVICE: 'cpu' }
 
+  const started = Date.now()
+  $.ui.status(`generating ${duration}s sfx with ${model} (${device})...`)
+
   let run
   try {
     run = await $.process.run(argv, init)
   } catch (err) {
+    $.ui.status(undefined)
     return { ok: false, error: `sa3-generate failed to start: ${err && err.message ? err.message : err}` }
   }
 
+  const elapsed = ((Date.now() - started) / 1000).toFixed(1)
+
   if (run.exitCode !== 0) {
+    $.ui.status(undefined)
     return { ok: false, error: `sa3-generate exited ${run.exitCode}: ${run.stderr || run.stdout}` }
   }
 
@@ -94,10 +101,12 @@ async function generate($, opts) {
   try {
     bytes = await $.fs.read(outPath, { as: 'bytes' })
   } catch (err) {
+    $.ui.status(undefined)
     return { ok: false, error: `wrote ${outPath} but could not read it back: ${err}` }
   }
 
-  return { ok: true, path: outPath, base64: bytes.base64, duration, prompt }
+  $.ui.status(undefined)
+  return { ok: true, path: outPath, base64: bytes.base64, duration, prompt, elapsed }
 }
 
 export function register(on, options) {
@@ -142,7 +151,7 @@ export function register(on, options) {
     const r = await generate($, { prompt: a.prompt, duration: a.duration, seed: a.seed, steps: a.steps })
     if (!r.ok) return { text: 'sfx-gen: ' + r.error }
     await $.audio.play({ base64: r.base64, mime: 'audio/wav' })
-    return { text: `sfx-gen: generated ${r.duration}s -> ${r.path}\n  "${r.prompt}"` }
+    return { text: `sfx-gen: generated ${r.duration}s in ${r.elapsed}s -> ${r.path}\n  "${r.prompt}"` }
   })
 
   on('tool.call', { tool: 'mcp__sfx-gen__sfx' }, async ($, e) => {
@@ -154,6 +163,6 @@ export function register(on, options) {
     })
     if (!r.ok) return { result: r.error }
     if (e.play !== false) await $.audio.play({ base64: r.base64, mime: 'audio/wav' })
-    return { result: `Generated ${r.duration}s sound effect "${r.prompt}" -> ${r.path}` }
+    return { result: `Generated ${r.duration}s sound effect "${r.prompt}" in ${r.elapsed}s -> ${r.path}` }
   })
 }
