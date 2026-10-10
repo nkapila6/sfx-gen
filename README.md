@@ -12,6 +12,14 @@ C++/ggml port of Stable Audio 3, and hands the WAV back to Claude (and plays it)
   the command line
 - A `sfx` tool Claude can call, so Claude can generate foley for a video or
   sound-design task without you prompting each clip
+- A "Sound effects" pane (`/sfx-pane`) listing your clips with Play and Share
+  mp4 buttons, and a row above the prompt showing progress and the last clip
+- Share mp4 renders a waveform video to `~/Downloads` and copies the file, so
+  you can paste it straight into WhatsApp (needs `ffmpeg`)
+
+Clips are kept across sessions (last 50, paths only, via `$.store`). The WAVs
+themselves live wherever the session ran, so a clip from a deleted folder
+won't play anymore.
 
 ## Prerequisites
 

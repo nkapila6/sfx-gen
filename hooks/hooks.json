@@ -1,4 +1,4 @@
 {
   "description": "sfx-gen hooks module",
-  "modules": ["./register.js"]
+  "modules": ["./register.tsx"]
 }
