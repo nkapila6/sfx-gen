@@ -1,0 +1,7 @@
+audio/
+out/
+.sfx-*.wav
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
