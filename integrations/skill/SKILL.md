@@ -20,7 +20,8 @@ The `sfx` CLI must be on `$PATH` (installed by the sfx-gen installer). Verify wi
     sfx "door creak" --play                     # play after generating
     sfx "alarm beep" --out /path/clip.wav       # choose the file
 
-Output prints the wav path. Keep prompts to one sound each; layer clips for complex scenes.
+Without `--out` the wav goes to a temp directory; the printed path is the only
+reliable way to find it. Pass `--out ./clip.wav` to keep it in the project.
 
 ## When to use
 
