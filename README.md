@@ -1,110 +1,52 @@
 # sfx-gen
 
-A Claude Code mod that generates sound effects from a text prompt using a local
-Stable Audio model. No API key, no Python at inference time.
+Sound effects from a text prompt, inside Claude Code. Runs a local Stable Audio
+model through [sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp): no API
+key, no Python, about 1.5s for an 8s clip on Apple Silicon.
 
-It shells out to [`sa3.cpp`](https://github.com/betweentwomidnights/sa3.cpp), a
-C++/ggml port of Stable Audio 3, and hands the WAV back to Claude (and plays it).
-
-## What it adds
-
-- `/sfx <description> [--duration N] [--seed N]` - generate a sound effect from
-  the command line
-- A `sfx` tool Claude can call, so Claude can generate foley for a video or
-  sound-design task without you prompting each clip
-- A "Sound effects" pane (`/sfx-pane`) listing your clips as bordered cards
-  with a waveform, Play and mp3 buttons, and a row above the prompt showing
-  progress and the last clip
-- The mp3 button converts the clip to `~/Downloads` and copies the file, so
-  you can paste it straight into a chat (needs `ffmpeg`)
-
-Clips are kept across sessions (last 50, paths only, via `$.store`). The WAVs
-themselves live wherever the session ran, so a clip from a deleted folder
-won't play anymore.
-
-## Prerequisites
-
-1. `git`, `cmake`, and a C++17 compiler on PATH.
-2. Build `sa3.cpp`:
+## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/betweentwomidnights/sa3.cpp.git
-cd sa3.cpp
-./build.sh metal   # or: cpu / cuda / vulkan / hip
+curl -fsSL https://raw.githubusercontent.com/nkapila6/sfx-gen/main/install.sh | bash
 ```
 
-3. Download the model weights (curl only, no Python):
+macOS only. Nothing gets compiled: it downloads the prebuilt sa3.cpp release
+(checksum verified), fetches the weights from HuggingFace (~1 GB, into
+`~/.claude/sa3`), and installs the plugin. Safe to re-run.
 
-```bash
-./models.sh --variant small-sfx --encoding q5_k_m --ae-encoding q5_k_m
-```
-
-## Configure
-
-The mod needs `sa3_dir` set to your `sa3.cpp` checkout. Any of these work:
-
-### 1. Per-session flag (simplest, no files changed)
-
-```bash
-claude --plugin-dir /Users/nkapila6/dev/cc-mod/sfx-gen
-```
-
-Then `/config`, find the `sfx-gen` rows, set `sa3_dir`. The value is stored in
-your settings and reused next session.
-
-### 2. Environment variable (works headless, `claude -p` too)
-
-```bash
-export SA3_CPP_DIR=/path/to/sa3.cpp
-claude --plugin-dir /path/to/sfx-gen
-```
-
-`SA3_CPP_DIR` is read at generation time, so it must be exported in the same
-shell before launching Claude.
-
-### 3. Persistent install (always-on, no flag)
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/sfx-gen"
-  },
-  "pluginConfigs": {
-    "sfx-gen@inline": {
-      "options": {
-        "sa3_dir": "/path/to/sa3.cpp"
-      }
-    }
-  }
-}
-```
-
-`pluginConfigs` keys take the plugin name plus `@inline` for a
-`--plugin-dir`/`CLAUDE_CODE_PLUGIN_DIRS` load, and the config values go under
-`options`. With this, the mod loads in every session without a flag.
-
-## Config
-
-| Option | Default | Meaning |
-|---|---|---|
-| `sa3_dir` | (required) | Path to the `sa3.cpp` checkout |
-| `model` | `small-sfx` | `small-sfx`, `small-music`, or `medium` |
-| `device` | `auto` | `auto`, `cpu`, or `metal` |
-| `encoding` | `q5_k_m` | Must match what `models.sh` fetched |
-| `duration` | `8` | Default clip length in seconds |
-
-## Usage
+## Use
 
 ```
 /sfx a whoosh across the screen
 /sfx footsteps on gravel --duration 6 --seed 42
+/sfx-pane                                   clips with waveforms, play, mp3
+/sfx-notify error a blood-curdling scream   sound for failed tool calls
 ```
 
-Or ask Claude in natural language ("generate a sound effect of a metal impact")
-and it will call the `sfx` tool.
+Or just ask Claude ("make me a door creak", "use a doorbell when you need me").
+It calls the `sfx` tool, and `notify_on` assigns the clip to an event.
 
-## License
+`/sfx-notify` events: `error` (a tool call failed), `permission` (Claude is
+waiting on you), `done` (reply finished), `abort` (you interrupted), `compact`.
+`/sfx-notify` alone lists them, `<event> test` plays one, `<event> off` clears
+it, `off`/`on` mutes everything. The sounds live in `~/.claude/sfx-gen` and
+play instantly since they're generated once.
+
+The mp3 button needs `ffmpeg` (`brew install ffmpeg`).
+
+## Config
+
+Change with `claude plugin configure sfx-gen@sfx-gen`.
+
+| Option | Default | |
+|---|---|---|
+| `sa3_dir` | `~/.claude/sa3` via the installer | folder with `build/bin/sa3-generate` and `models/` |
+| `model` | `small-sfx` | `small-sfx`, `small-music`, `medium` |
+| `device` | `auto` | `auto`, `cpu`, `metal` |
+| `encoding` | `q5_k_m` | must match the downloaded weights |
+| `duration` | `8` | default clip length in seconds |
+
+Hacking on it: `claude --plugin-dir /path/to/sfx-gen` with your own sa3.cpp
+build, or set `SA3_CPP_DIR`.
 
 MIT. Model weights are under the Stability AI Community License.

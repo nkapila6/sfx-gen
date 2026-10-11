@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "sfx-gen",
+  "description": "Local text-to-sound-effect generation for Claude Code",
+  "owner": {
+    "name": "nkapila6"
+  },
+  "plugins": [
+    {
+      "name": "sfx-gen",
+      "description": "Generate sound effects from text prompts with a local Stable Audio model (sa3.cpp), no API, no Python",
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/nkapila6/sfx-gen"
+    }
+  ]
+}
