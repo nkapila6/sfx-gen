@@ -89,6 +89,13 @@ main() {
   rm -f "$probe"
   note "ok"
 
+  # stage the CLI wrapper and integrations for the steps below
+  curl -fsSL -o "$tmp/wrapper-sfx" https://raw.githubusercontent.com/$REPO/main/bin/sfx
+  mkdir -p "$tmp/wrapper" "$tmp/integrations"
+  mv "$tmp/wrapper-sfx" "$tmp/wrapper/sfx" && chmod +x "$tmp/wrapper/sfx"
+  curl -fsSL -o "$tmp/integrations/SKILL.md" https://raw.githubusercontent.com/$REPO/main/integrations/skill/SKILL.md
+  curl -fsSL -o "$tmp/integrations/opencode-sfx.ts" https://raw.githubusercontent.com/$REPO/main/integrations/opencode/tools/sfx.ts
+
   say "installing the sfx-gen plugin"
   # claude reads stdin in places; keep it off the piped script
   if ! claude plugin marketplace add "$REPO" </dev/null >/dev/null 2>&1; then
@@ -104,6 +111,28 @@ main() {
   fi
 
   command -v ffmpeg >/dev/null || note "optional: install ffmpeg for the mp3 share button"
+
+  say "installing the sfx CLI for other agents"
+  # the wrapper goes to ~/.local/bin (on PATH on most setups), and skills/tools
+  # are installed into whatever agents are found. Nothing installed -> noted.
+  local cbindir="$HOME/.local/bin"
+  mkdir -p "$cbindir"
+  install -m 755 "$tmp/wrapper/sfx" "$cbindir/sfx" 2>/dev/null || cp "$tmp/wrapper/sfx" "$cbindir/sfx" && chmod +x "$cbindir/sfx"
+  note "sfx CLI -> $cbindir/sfx"
+  case ":$PATH:" in *":$cbindir:"*) ;; *) note "add to PATH: export PATH=\"$cbindir:\$PATH\"" ;; esac
+
+  # oh-my-pi (and anything reading ~/.agents/skills): the agent-facing skill
+  if [ -d "$HOME/.agents/skills" ] || command -v omp >/dev/null; then
+    mkdir -p "$HOME/.agents/skills/sfx-gen"
+    cp "$tmp/integrations/SKILL.md" "$HOME/.agents/skills/sfx-gen/SKILL.md"
+    note "skill -> ~/.agents/skills/sfx-gen (oh-my-pi)"
+  fi
+
+  # opencode: a native tool, plus the same skill in its skills dir
+  if [ -d "$HOME/.config/opencode" ]; then
+    cp "$tmp/integrations/opencode-sfx.ts" "$HOME/.config/opencode/tools/sfx.ts"
+    note "tool -> ~/.config/opencode/tools/sfx.ts"
+  fi
 
   echo
   say "done. Start a new claude session and try:"
