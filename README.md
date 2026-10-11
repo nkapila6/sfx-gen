@@ -2,24 +2,35 @@
 
 Sound effects from a text prompt, inside Claude Code. Runs a local Stable Audio
 model through [sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp): no API
-key, no Python, about 1.5s for an 8s clip on Apple Silicon.
+key, no Python, about 1.5s for an 8s clip on Apple Silicon. macOS, Linux, Windows.
 
 ## Install
+
+macOS / Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nkapila6/sfx-gen/main/install.sh | bash
 ```
 
-macOS only. Nothing gets compiled: it downloads the prebuilt sa3.cpp release
-(checksum verified), fetches the weights from HuggingFace (~1 GB, into
-`~/.claude/sa3`), and installs the plugin. Safe to re-run.
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/nkapila6/sfx-gen/main/install.ps1 | iex
+```
+
+Nothing gets compiled. It downloads a prebuilt sa3.cpp (checksum verified),
+fetches the weights from HuggingFace (~1 GB, into `~/.claude/sa3`), and installs
+the plugin. Safe to re-run. macOS and Windows use sa3.cpp's own releases; Linux
+(x86_64, arm64, glibc 2.35+) uses a CPU build hosted on this repo's releases,
+so expect ~5-10s per clip there instead of ~1.5s on Apple Silicon.
 
 ## Use
 
 ```
 /sfx a whoosh across the screen
 /sfx footsteps on gravel --duration 6 --seed 42
-/sfx-pane                                   clips with waveforms, play, mp3
+/sfx-pane                                   this session's clips, play, mp3
+/sfx-pane history                           toggle older clips
 /sfx-notify error a blood-curdling scream   sound for failed tool calls
 ```
 
@@ -32,7 +43,8 @@ waiting on you), `done` (reply finished), `abort` (you interrupted), `compact`.
 it, `off`/`on` mutes everything. The sounds live in `~/.claude/sfx-gen` and
 play instantly since they're generated once.
 
-The mp3 button needs `ffmpeg` (`brew install ffmpeg`).
+The mp3 button needs `ffmpeg`. It copies the file to the clipboard on macOS,
+Windows, and Linux with `wl-copy` or `xclip`.
 
 ## Config
 

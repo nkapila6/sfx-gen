@@ -1,6 +1,6 @@
 {
   "name": "sfx-gen",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Generate sound effects from text prompts with a local Stable Audio model (sa3.cpp), no API, no Python",
   "author": { "name": "cc-mod" },
   "license": "MIT",

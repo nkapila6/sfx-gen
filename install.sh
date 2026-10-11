@@ -13,7 +13,9 @@ SA3_HOME="${SA3_HOME:-$HOME/.claude/sa3}"
 SFX_MODEL="${SFX_MODEL:-small-sfx}"
 SFX_ENCODING="${SFX_ENCODING:-q5_k_m}"
 REPO="nkapila6/sfx-gen"
-RELEASES="https://github.com/betweentwomidnights/sa3.cpp/releases/download/$SA3_VERSION"
+# macOS comes from sa3.cpp's own releases; upstream ships no Linux build, so we host one
+MAC_RELEASES="https://github.com/betweentwomidnights/sa3.cpp/releases/download/$SA3_VERSION"
+LINUX_RELEASES="https://github.com/$REPO/releases/download/sa3-$SA3_VERSION-linux"
 
 green=$'\033[32m' red=$'\033[31m' dim=$'\033[2m' off=$'\033[0m'
 say() { printf '%s❯%s %s\n' "$green" "$off" "$*"; }
@@ -22,29 +24,57 @@ die() { printf '%s✗%s %s\n' "$red" "$off" "$*" >&2; exit 1; }
 
 # Wrapped in main so a half-downloaded script never runs.
 main() {
-  [ "$(uname -s)" = Darwin ] || die "macOS only for now: sa3.cpp publishes no prebuilt Linux build"
-  for t in curl unzip shasum claude; do
+  local os pkg url sums sha
+  case "$(uname -s)" in
+    Darwin)
+      os=mac
+      pkg="sa3-$SA3_VERSION-macos-universal.zip"
+      url="$MAC_RELEASES"
+      sums=SHA256SUMS-macos
+      ;;
+    Linux)
+      os=linux
+      local arch
+      case "$(uname -m)" in
+        x86_64 | amd64) arch=x86_64 ;;
+        aarch64 | arm64) arch=aarch64 ;;
+        *) die "no prebuilt sa3.cpp for $(uname -m)" ;;
+      esac
+      pkg="sa3-$SA3_VERSION-linux-$arch.tar.gz"
+      url="$LINUX_RELEASES"
+      sums=SHA256SUMS-linux
+      ;;
+    *) die "unsupported OS $(uname -s). On Windows use install.ps1" ;;
+  esac
+
+  if command -v sha256sum >/dev/null; then sha="sha256sum"; else sha="shasum -a 256"; fi
+  for t in curl claude; do
     command -v "$t" >/dev/null || die "missing '$t'. Install it and run this again"
   done
+  [ "$os" = mac ] && { command -v unzip >/dev/null || die "missing 'unzip'"; }
 
   # the mod looks for sa3-generate under <sa3_dir>/build/bin and weights under <sa3_dir>/models
   local bin="$SA3_HOME/build/bin"
-  local zip="sa3-$SA3_VERSION-macos-universal.zip"
 
   if [ -x "$bin/sa3-generate" ] && grep -q "\"$SA3_VERSION\"" "$bin/BUILD-INFO.json" 2>/dev/null; then
     say "sa3.cpp $SA3_VERSION already installed"
   else
-    say "downloading sa3.cpp $SA3_VERSION (prebuilt, about 9 MB)"
+    say "downloading sa3.cpp $SA3_VERSION for $os (prebuilt, a few MB)"
     tmp="$(mktemp -d)"
     trap 'rm -rf "${tmp:-}"' EXIT
-    curl -fsSL -o "$tmp/$zip" "$RELEASES/$zip"
-    curl -fsSL -o "$tmp/SHA256SUMS" "$RELEASES/SHA256SUMS-macos"
-    (cd "$tmp" && grep " $zip\$" SHA256SUMS | shasum -a 256 -c - >/dev/null) || die "checksum mismatch on $zip, not installing it"
+    curl -fsSL -o "$tmp/$pkg" "$url/$pkg"
+    curl -fsSL -o "$tmp/SHA256SUMS" "$url/$sums"
+    (cd "$tmp" && grep " $pkg\$" SHA256SUMS | $sha -c - >/dev/null) || die "checksum mismatch on $pkg, not installing it"
     rm -rf "$bin"
     mkdir -p "$bin"
-    unzip -q "$tmp/$zip" -d "$bin"
+    if [ "$os" = mac ]; then
+      unzip -q "$tmp/$pkg" -d "$bin"
+    else
+      tar xzf "$tmp/$pkg" -C "$bin" --strip-components=1
+    fi
     note "verified and unpacked to $bin"
   fi
+  [ "$os" = linux ] && note "linux runs on the CPU, expect ~5-10s per clip instead of ~1.5s on a Mac"
 
   say "fetching $SFX_MODEL weights ($SFX_ENCODING). About 1 GB the first time, skipped after"
   (cd "$bin" && bash ./models.sh --variant "$SFX_MODEL" --encoding "$SFX_ENCODING" \
@@ -73,7 +103,7 @@ main() {
       --config "sa3_dir=$SA3_HOME" --config "model=$SFX_MODEL" --config "encoding=$SFX_ENCODING" </dev/null >/dev/null
   fi
 
-  command -v ffmpeg >/dev/null || note "optional: brew install ffmpeg for the mp3 share button"
+  command -v ffmpeg >/dev/null || note "optional: install ffmpeg for the mp3 share button"
 
   echo
   say "done. Start a new claude session and try:"
