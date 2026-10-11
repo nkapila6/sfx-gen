@@ -89,12 +89,17 @@ main() {
   rm -f "$probe"
   note "ok"
 
-  # stage the CLI wrapper and integrations for the steps below
-  curl -fsSL -o "$tmp/wrapper-sfx" https://raw.githubusercontent.com/$REPO/main/bin/sfx
+  # stage the CLI wrapper and integrations for the steps below. raw's CDN can
+  # lag behind main right after a push, so pin to the exact commit sha.
+  local sha
+  sha="$(curl -fsSL "https://api.github.com/repos/$REPO/commits/main" 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4 || true)"
+  local ref="main"
+  [ -n "$sha" ] && ref="$sha"
   mkdir -p "$tmp/wrapper" "$tmp/integrations"
-  mv "$tmp/wrapper-sfx" "$tmp/wrapper/sfx" && chmod +x "$tmp/wrapper/sfx"
-  curl -fsSL -o "$tmp/integrations/SKILL.md" https://raw.githubusercontent.com/$REPO/main/integrations/skill/SKILL.md
-  curl -fsSL -o "$tmp/integrations/opencode-sfx.ts" https://raw.githubusercontent.com/$REPO/main/integrations/opencode/tools/sfx.ts
+  curl -fsSL -o "$tmp/wrapper/sfx" "https://raw.githubusercontent.com/$REPO/$ref/bin/sfx"
+  chmod +x "$tmp/wrapper/sfx"
+  curl -fsSL -o "$tmp/integrations/SKILL.md" "https://raw.githubusercontent.com/$REPO/$ref/integrations/skill/SKILL.md"
+  curl -fsSL -o "$tmp/integrations/opencode-sfx.ts" "https://raw.githubusercontent.com/$REPO/$ref/integrations/opencode/sfx.ts"
 
   say "installing the sfx-gen plugin"
   # claude reads stdin in places; keep it off the piped script
