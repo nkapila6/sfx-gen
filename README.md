@@ -1,7 +1,12 @@
 # sfx-gen
 
-Sound effects from a text prompt, inside Claude Code. Runs a small Stable Audio
-model locally through [sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp): no API
+[![License: MIT](https://img.shields.io/github/license/nkapila6/sfx-gen)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.3.0-2ea44f)](.claude-plugin/plugin.json)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#)
+[![Stars](https://img.shields.io/github/stars/nkapila6/sfx-gen)](https://github.com/nkapila6/sfx-gen/stargazers)
+
+Sound effects from a text prompt, inside Claude Code, OpenCode, or omp. Runs a
+small Stable Audio model locally through [sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp): no API
 key, no Python, about 1.5s for an 8s clip on Apple Silicon. macOS, Linux, Windows.
 
 https://github.com/user-attachments/assets/2987d1f3-53e9-4546-b5a7-2018d2dbacfc
@@ -30,8 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/nkapila6/sfx-gen/main/install.sh | 
 ```
 
 No terminal handy? Ask your agent to install it for you: "install
-github.com/nkapila6/sfx-gen". The installer also detects OpenCode and oh-my-pi
-and wires the `sfx` tool into whichever it finds.
+github.com/nkapila6/sfx-gen". The installer also detects OpenCode and omp
+(oh-my-pi) and wires the `sfx` tool into whichever it finds.
 
 Windows (PowerShell):
 
