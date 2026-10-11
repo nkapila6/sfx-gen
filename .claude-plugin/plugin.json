@@ -2,7 +2,9 @@
   "name": "sfx-gen",
   "version": "0.3.0",
   "description": "Generate sound effects from text prompts with a local Stable Audio model (sa3.cpp), no API, no Python",
-  "author": { "name": "cc-mod" },
+  "author": {
+    "name": "cc-mod"
+  },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -15,22 +17,19 @@
     "model": {
       "type": "string",
       "title": "Model",
-      "description": "Stable Audio model to generate with",
-      "options": ["small-sfx", "small-music", "medium"],
+      "description": "Stable Audio model to generate with. One of: small-sfx, small-music, medium",
       "default": "small-sfx"
     },
     "device": {
       "type": "string",
       "title": "Device",
-      "description": "Backend. auto picks Metal on Apple Silicon, CPU elsewhere",
-      "options": ["auto", "cpu", "metal"],
+      "description": "Backend. auto picks Metal on Apple Silicon, CPU elsewhere. One of: auto, cpu, metal",
       "default": "auto"
     },
     "encoding": {
       "type": "string",
       "title": "Weight encoding",
-      "description": "GGUF precision of the downloaded weights. Must match what models.sh fetched",
-      "options": ["f16", "f32", "q4_k_m", "q5_k_m", "q8_0"],
+      "description": "GGUF precision of the downloaded weights. Must match what models.sh fetched. One of: f16, f32, q4_k_m, q5_k_m, q8_0",
       "default": "q5_k_m"
     },
     "duration": {
