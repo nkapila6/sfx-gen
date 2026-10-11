@@ -10,7 +10,10 @@ $ProgressPreference = 'SilentlyContinue'  # the progress bar makes Invoke-WebReq
 
 function Say($m) { Write-Host "$([char]0x276F) " -ForegroundColor Green -NoNewline; Write-Host $m }
 function Note($m) { Write-Host "  $m" -ForegroundColor DarkGray }
-function Die($m) { Write-Host "x $m" -ForegroundColor Red; throw $m }
+function Die($m) {
+  Write-Host "x $m" -ForegroundColor Red
+  exit 1
+}
 
 # Wrapped in a function so a half-downloaded script never runs.
 function Install-SfxGen {
