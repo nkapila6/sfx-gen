@@ -19,6 +19,10 @@ declare module 'claude-code' {
       pending: Pending | null
       // id of the last clip the band was dismissed for
       dismissed: string | null
+      // pane shows clips from before this session only when toggled on
+      showHistory: boolean
+      // when this session started; older clips count as history
+      since: number
     }
   }
 }

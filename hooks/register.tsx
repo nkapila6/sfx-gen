@@ -17,6 +17,8 @@ const clipsRef = { plugin: 'sfx-gen', key: 'clips' } as const
 const clips = atom(clipsRef, [])
 const pending = atom({ plugin: 'sfx-gen', key: 'pending' } as const, null)
 const dismissed = atom({ plugin: 'sfx-gen', key: 'dismissed' } as const, null)
+const showHistory = atom({ plugin: 'sfx-gen', key: 'showHistory' } as const, false)
+const since = atom({ plugin: 'sfx-gen', key: 'since' } as const, 0)
 
 const DEFAULTS = {
   model: 'small-sfx',
@@ -76,8 +78,41 @@ function boxed(lines: string[]) {
   return ['', `╭${'─'.repeat(w + 2)}╮`, ...lines.map(l => `│ ${l.padEnd(w)} │`), `╰${'─'.repeat(w + 2)}╯`].join('\n')
 }
 
-function pickBinary(root: string) {
-  return root ? root + '/build-metal/bin/sa3-generate' : ''
+const POWERSHELL = 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+
+type OS = 'mac' | 'linux' | 'windows'
+let osCache: OS | null = null
+
+// The module sandbox has no process.platform, so sniff it.
+async function detectOS($: Engine): Promise<OS> {
+  if (osCache) return osCache
+  if ((await $.env.get('OS')) === 'Windows_NT') osCache = 'windows'
+  else if (await $.fs.exists('/System/Library/CoreServices')) osCache = 'mac'
+  else osCache = 'linux'
+  return osCache
+}
+
+async function homeDir($: Engine) {
+  return ((await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || '').replace(/\\/g, '/')
+}
+
+function binaryCandidates(root: string, os: OS) {
+  const exe = os === 'windows' ? 'sa3-generate.exe' : 'sa3-generate'
+  return [`${root}/build-metal/bin/${exe}`, `${root}/build/bin/${exe}`, `${root}/build/bin/Release/${exe}`]
+}
+
+// Absolute paths first, then a PATH lookup through which/where.
+async function findTool($: Engine, name: string, known: string[] = []) {
+  const os = await detectOS($)
+  const hit = await firstExisting($, known)
+  if (hit) return hit
+  const lookup = os === 'windows' ? ['C:/Windows/System32/where.exe', name] : ['/usr/bin/which', name]
+  try {
+    const r = await $.process.run(lookup)
+    const first = r.stdout.split(/\r?\n/)[0]?.trim()
+    if (r.exitCode === 0 && first) return first
+  } catch {}
+  return null
 }
 
 // Parse a prompt string, pulling out --duration/--dur, --seed, --steps flags.
@@ -200,13 +235,12 @@ async function generate($: Engine, opts: GenOpts): Promise<GenResult> {
 
   if (!prompt) return { ok: false, error: 'empty prompt' }
 
-  const bin =
-    (await firstExisting($, [sa3Dir + '/build-metal/bin/sa3-generate', sa3Dir + '/build/bin/sa3-generate'])) ??
-    pickBinary(sa3Dir)
+  const candidates = binaryCandidates(sa3Dir.replace(/\\/g, '/'), await detectOS($))
+  const bin = await firstExisting($, candidates)
   const modelsDir = sa3Dir + '/models'
 
-  if (!(await $.fs.exists(bin))) {
-    return { ok: false, error: `sa3-generate not found at ${bin}. Set the sa3_dir config or install sa3.cpp.` }
+  if (!bin) {
+    return { ok: false, error: `sa3-generate not found under ${sa3Dir || '(sa3_dir unset)'}. Set the sa3_dir config or run the installer.` }
   }
   if (!(await $.fs.exists(modelsDir))) {
     return { ok: false, error: `models dir not found: ${modelsDir}. Run sa3.cpp's ./models.sh first.` }
@@ -271,9 +305,14 @@ async function saveNotify($: Engine) {
 }
 
 async function notifyDir($: Engine) {
-  const dir = `${await $.env.get('HOME')}/.claude/sfx-gen`
+  const dir = `${await homeDir($)}/.claude/sfx-gen`
+  if (await $.fs.exists(dir)) return dir
   // $.fs has no mkdir
-  await $.process.run(['/bin/mkdir', '-p', dir])
+  const argv =
+    (await detectOS($)) === 'windows'
+      ? [POWERSHELL, '-NoProfile', '-Command', 'New-Item -ItemType Directory -Force -Path $args[0] | Out-Null', dir]
+      : ['/bin/mkdir', '-p', dir]
+  await $.process.run(argv)
   return dir
 }
 
@@ -376,10 +415,44 @@ async function playClip($: Engine, clip: Clip) {
   }
 }
 
+// A file reference on the clipboard pastes as an attachment in chat apps.
+async function copyFileRef($: Engine, path: string) {
+  const os = await detectOS($)
+  try {
+    if (os === 'mac') {
+      const cp = await $.process.run([
+        '/usr/bin/osascript',
+        '-e', 'on run argv',
+        '-e', 'set the clipboard to (POSIX file (item 1 of argv))',
+        '-e', 'end run',
+        path,
+      ])
+      return cp.exitCode === 0
+    }
+    if (os === 'windows') {
+      const cp = await $.process.run([POWERSHELL, '-NoProfile', '-Command', 'Set-Clipboard -Path $args[0]', path])
+      return cp.exitCode === 0
+    }
+    // file managers and chat apps read a uri-list as "these files"
+    const uri = { stdin: `file://${path}\n` }
+    const wl = await findTool($, 'wl-copy')
+    if (wl) return (await $.process.run([wl, '--type', 'text/uri-list'], uri)).exitCode === 0
+    const xclip = await findTool($, 'xclip')
+    if (xclip) return (await $.process.run([xclip, '-selection', 'clipboard', '-t', 'text/uri-list'], uri)).exitCode === 0
+  } catch {}
+  return false
+}
+
 async function shareClip($: Engine, clip: Clip) {
-  const ffmpeg = await firstExisting($, ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg'])
+  const os = await detectOS($)
+  const ffmpeg = await findTool($, os === 'windows' ? 'ffmpeg.exe' : 'ffmpeg', [
+    '/opt/homebrew/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/usr/bin/ffmpeg',
+  ])
   if (!ffmpeg) {
-    $.ui.toast('sfx-gen: ffmpeg not found, install it with brew install ffmpeg')
+    const how = os === 'mac' ? 'brew install ffmpeg' : os === 'windows' ? 'winget install ffmpeg' : 'your package manager'
+    $.ui.toast(`sfx-gen: ffmpeg not found, install it with ${how}`)
     return
   }
   if (!(await $.fs.exists(clip.path))) {
@@ -387,8 +460,7 @@ async function shareClip($: Engine, clip: Clip) {
     return
   }
 
-  const home = await $.env.get('HOME')
-  const out = `${home}/Downloads/sfx-${slug(clip.prompt)}-${clip.id}.mp3`
+  const out = `${await homeDir($)}/Downloads/sfx-${slug(clip.prompt)}-${clip.id}.mp3`
   $.ui.toast('sfx-gen: converting to mp3...')
 
   try {
@@ -405,19 +477,7 @@ async function shareClip($: Engine, clip: Clip) {
     return
   }
 
-  // A file reference on the clipboard pastes as an attachment in chat apps.
-  let copied = false
-  try {
-    const cp = await $.process.run([
-      '/usr/bin/osascript',
-      '-e', 'on run argv',
-      '-e', 'set the clipboard to (POSIX file (item 1 of argv))',
-      '-e', 'end run',
-      out,
-    ])
-    copied = cp.exitCode === 0
-  } catch {}
-
+  const copied = await copyFileRef($, out)
   const where = '~/Downloads/' + basename(out)
   $.ui.toast(copied ? `mp3 saved to ${where} and copied to the clipboard` : `mp3 saved to ${where}`)
 }
@@ -438,6 +498,8 @@ export const register: Register = (on, options) => {
       // old clips stay in the pane but don't take over the band
       const last = list[list.length - 1]
       if (last) await update($, dismissed, () => last.id)
+      // clips older than this are history, hidden in the pane until toggled
+      await update($, since, () => Date.now())
     }
 
     // module vars reset on reload, so reread notify sounds every start
@@ -452,6 +514,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'sfx-pane',
       description: 'Show generated sound effects in a pane',
+      argumentHint: '[history]',
     })
     await $.command.register({
       name: 'sfx-notify',
@@ -503,7 +566,11 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'sfx-notify' }, async ($, e) => ({ text: await runNotify($, e.args) }))
 
-  on('command.run', { command: 'sfx-pane' }, async $ => {
+  on('command.run', { command: 'sfx-pane' }, async ($, e) => {
+    if ((e.args || '').trim() === 'history') {
+      await update($, showHistory, v => !v)
+      return { text: (await read($, showHistory)) ? 'Showing clip history.' : 'Hiding clip history.' }
+    }
     const opened = await $.ui.open({ id: PANE, title: PANE_TITLE })
     return { text: opened.isPlaced ? 'Sound effects pane opened.' : 'Sound effects pane is waiting for room.' }
   })
@@ -544,8 +611,12 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const list = (await read($, clips)) ?? []
+    const all = (await read($, clips)) ?? []
     const now = await read($, pending)
+    const history = await read($, showHistory)
+    const start = await read($, since)
+    const older = all.filter(c => c.at < start).length
+    const list = history ? all : all.filter(c => c.at >= start)
     // each clip card is 5 rows tall with its border
     const room = Math.max(1, Math.floor(((e.viewport?.rows ?? 24) - 6) / 5))
     const recent = list.slice(-room).reverse()
@@ -554,9 +625,19 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
         <Box justifyContent="space-between">
           <Text color={ACCENT} bold>~/sfx</Text>
-          <Text dimColor>
-            {list.length} clips · {config.model}
-          </Text>
+          <Box>
+            <Text dimColor>
+              {list.length} clips · {config.model}
+              {older > 0 ? '  ' : ''}
+            </Text>
+            {older > 0 && (
+              <Button
+                key="history"
+                label={history ? `history ▾ ${older}` : `history ▸ ${older}`}
+                onPress={() => void update($, showHistory, v => !v)}
+              />
+            )}
+          </Box>
         </Box>
         {now && (
           <Box borderStyle="single" borderColor="yellow" paddingX={1}>
