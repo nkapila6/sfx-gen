@@ -58,7 +58,7 @@ const NOTIFY_DURATION = 2
 // a burst of failing calls should scream once, not ten times
 const NOTIFY_GAP_MS = 2000
 const NOTIFY_HINT: Record<NotifyEvent, string> = {
-  error: 'a tool call failed',
+  error: 'a tool call or test run fails',
   permission: 'Claude is waiting on you',
   done: 'a reply finished',
   abort: 'you interrupted a reply',
@@ -341,10 +341,29 @@ async function ring($: Engine, event: NotifyEvent) {
       base64 = (await $.fs.read(sound.path, { as: 'bytes' })).base64
       notifyAudio.set(event, base64)
     }
+    // say why a sound just went off
+    $.ui.toast(`♪ ${event}: "${sound.prompt}"`)
     await $.audio.play({ base64, mime: 'audio/wav' })
   } catch (err) {
     $.ui.toast(`sfx-gen: cannot play the ${event} sound: ${errText(err)}`)
   }
+}
+
+// Claude usually runs `npm test | tail`, which exits 0 and never counts as an error,
+// so also catch the summary lines common test runners print.
+const TEST_FAIL = [
+  /^\s*(ℹ|#)\s*fail\s+[1-9]/m, // node --test, tap
+  /\b[1-9]\d*\s+(failed|failing)\b/i, // jest, vitest, pytest, mocha
+  /^FAIL\b/m, // jest file header
+  /^--- FAIL:/m, // go test
+  /^FAILED\b/m, // pytest short summary, cargo
+]
+
+function looksLikeTestFailure(r: { text?: string; result?: unknown }) {
+  const res = r.result as { stdout?: unknown; stderr?: unknown } | undefined
+  const out =
+    typeof r.text === 'string' ? r.text : [res?.stdout, res?.stderr].filter(v => typeof v === 'string').join('\n')
+  return TEST_FAIL.some(re => re.test(out))
 }
 
 function notifyList() {
@@ -387,7 +406,8 @@ async function runNotify($: Engine, raw: string | undefined) {
 
   const r = await assignNotify($, event, parseArgs(tail))
   if (!r.ok) return `✗ ${r.error}`
-  await $.audio.play({ base64: r.base64, mime: 'audio/wav' })
+  // don't hold the output until the clip finishes playing
+  void $.audio.play({ base64: r.base64, mime: 'audio/wav' }).catch(() => {})
   return boxed([
     `❯ ${event} → "${r.clip.prompt}"`,
     r.clip.wave || FLAT,
@@ -403,7 +423,8 @@ async function announce($: Engine, r: GenResult, play: boolean) {
   }
   $.ui.toast(`sfx ready: ${r.clip.prompt} (${r.clip.elapsed}s)`)
   void $.ui.open({ id: PANE, title: PANE_TITLE })
-  if (play) await $.audio.play({ base64: r.base64, mime: 'audio/wav' })
+  // fire and forget: awaiting would block /sfx output and the tool result for the clip's length
+  if (play) void $.audio.play({ base64: r.base64, mime: 'audio/wav' }).catch(() => {})
 }
 
 async function playClip($: Engine, clip: Clip) {
@@ -529,7 +550,7 @@ export const register: Register = (on, options) => {
         '"metal impact with a deep sub boom", "whoosh across the screen", "footsteps on gravel". ' +
         'Keep prompts to one sound each and layer clips for complex scenes. ' +
         'Set notify_on to make the clip the sound played when that event happens ' +
-        '(error: a tool call failed, permission: waiting on the user, done: reply finished, ' +
+        '(error: a tool call or test run failed, permission: waiting on the user, done: reply finished, ' +
         'abort: user interrupted, compact: context compacted); notify clips default to 2s.',
       inputSchema: {
         type: 'object',
@@ -588,7 +609,7 @@ export const register: Register = (on, options) => {
   // Notification sounds. Each hook lets the engine run first and only listens.
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
-    if (r.isError) void ring($, 'error')
+    if (r.isError || (e.tool === 'Bash' && looksLikeTestFailure(r))) void ring($, 'error')
     return r
   })
 
@@ -627,7 +648,7 @@ export const register: Register = (on, options) => {
           <Text color={ACCENT} bold>~/sfx</Text>
           <Box>
             <Text dimColor>
-              {list.length} clips · {config.model}
+              {list.length} {list.length === 1 ? 'clip' : 'clips'} · {config.model}
               {older > 0 ? '  ' : ''}
             </Text>
             {older > 0 && (
