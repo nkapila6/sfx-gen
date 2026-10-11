@@ -33,6 +33,8 @@ type GenOpts = {
   duration?: number | string | null
   seed?: number | string | null
   steps?: number | string | null
+  // write here instead of the session cwd (notify sounds live outside any project)
+  outPath?: string
 }
 
 type GenResult =
@@ -42,6 +44,37 @@ type GenResult =
 const ACCENT = 'green'
 const WAVE_WIDTH = 32
 const FLAT = '·'.repeat(WAVE_WIDTH)
+
+// Moments the mod can ring for, each mapped to a pre-generated clip.
+const NOTIFY_EVENTS = ['error', 'permission', 'done', 'abort', 'compact'] as const
+type NotifyEvent = (typeof NOTIFY_EVENTS)[number]
+type NotifySound = { prompt: string; path: string; wave?: string }
+type NotifyConfig = { on: boolean; sounds: Partial<Record<NotifyEvent, NotifySound>> }
+
+const NOTIFY_KEY = 'notify'
+const NOTIFY_DURATION = 2
+// a burst of failing calls should scream once, not ten times
+const NOTIFY_GAP_MS = 2000
+const NOTIFY_HINT: Record<NotifyEvent, string> = {
+  error: 'a tool call failed',
+  permission: 'Claude is waiting on you',
+  done: 'a reply finished',
+  abort: 'you interrupted a reply',
+  compact: 'the conversation was compacted',
+}
+
+let notify: NotifyConfig = { on: true, sounds: {} }
+const notifyAudio = new Map<NotifyEvent, string>()
+const lastRing = new Map<NotifyEvent, number>()
+
+function isNotifyEvent(v: unknown): v is NotifyEvent {
+  return typeof v === 'string' && (NOTIFY_EVENTS as readonly string[]).includes(v)
+}
+
+function boxed(lines: string[]) {
+  const w = Math.max(...lines.map(l => l.length))
+  return ['', `╭${'─'.repeat(w + 2)}╮`, ...lines.map(l => `│ ${l.padEnd(w)} │`), `╰${'─'.repeat(w + 2)}╯`].join('\n')
+}
 
 function pickBinary(root: string) {
   return root ? root + '/build-metal/bin/sa3-generate' : ''
@@ -179,9 +212,8 @@ async function generate($: Engine, opts: GenOpts): Promise<GenResult> {
     return { ok: false, error: `models dir not found: ${modelsDir}. Run sa3.cpp's ./models.sh first.` }
   }
 
-  const cwd = await $.session.cwd()
   const id = String(Date.now())
-  const outPath = `${cwd}/.sfx-${id}.wav`
+  const outPath = opts.outPath ?? `${await $.session.cwd()}/.sfx-${id}.wav`
 
   const argv = [
     bin,
@@ -228,6 +260,100 @@ async function generate($: Engine, opts: GenOpts): Promise<GenResult> {
     $.ui.status(undefined)
     await update($, pending, () => null)
   }
+}
+
+async function saveNotify($: Engine) {
+  try {
+    await $.store.set(NOTIFY_KEY, notify)
+  } catch (err) {
+    $.ui.toast('sfx-gen: could not save notify sounds: ' + errText(err))
+  }
+}
+
+async function notifyDir($: Engine) {
+  const dir = `${await $.env.get('HOME')}/.claude/sfx-gen`
+  // $.fs has no mkdir
+  await $.process.run(['/bin/mkdir', '-p', dir])
+  return dir
+}
+
+// Generate a short clip and make it the sound for one event.
+async function assignNotify($: Engine, event: NotifyEvent, opts: GenOpts): Promise<GenResult> {
+  const outPath = `${await notifyDir($)}/notify-${event}.wav`
+  const r = await generate($, { ...opts, duration: opts.duration ?? NOTIFY_DURATION, outPath })
+  if (!r.ok) return r
+  notify.sounds[event] = { prompt: r.clip.prompt, path: outPath, wave: r.clip.wave }
+  notify.on = true
+  notifyAudio.set(event, r.base64)
+  await saveNotify($)
+  return r
+}
+
+// Play an event's sound from memory; read the wav once on first use.
+async function ring($: Engine, event: NotifyEvent) {
+  const sound = notify.sounds[event]
+  if (!notify.on || !sound) return
+  const now = Date.now()
+  if (now - (lastRing.get(event) ?? 0) < NOTIFY_GAP_MS) return
+  lastRing.set(event, now)
+  try {
+    let base64 = notifyAudio.get(event)
+    if (!base64) {
+      base64 = (await $.fs.read(sound.path, { as: 'bytes' })).base64
+      notifyAudio.set(event, base64)
+    }
+    await $.audio.play({ base64, mime: 'audio/wav' })
+  } catch (err) {
+    $.ui.toast(`sfx-gen: cannot play the ${event} sound: ${errText(err)}`)
+  }
+}
+
+function notifyList() {
+  const lines = [`❯ sfx-notify  ${notify.on ? 'on' : 'off (muted)'}`]
+  for (const ev of NOTIFY_EVENTS) {
+    const s = notify.sounds[ev]
+    lines.push(`${ev.padEnd(10)} ${s ? `"${s.prompt}"` : '·  ' + NOTIFY_HINT[ev]}`)
+  }
+  lines.push('', 'set   /sfx-notify <event> <description>', 'test  /sfx-notify <event> test', 'clear /sfx-notify <event> off', 'mute  /sfx-notify off | on')
+  return boxed(lines)
+}
+
+async function runNotify($: Engine, raw: string | undefined) {
+  const args = (raw || '').trim()
+  if (!args) return notifyList()
+
+  if (args === 'on' || args === 'off') {
+    notify.on = args === 'on'
+    await saveNotify($)
+    return notifyList()
+  }
+
+  const [head = '', ...rest] = args.split(/\s+/)
+  const event = head.toLowerCase()
+  if (!isNotifyEvent(event)) return `✗ unknown event "${head}". Pick one of: ${NOTIFY_EVENTS.join(', ')}`
+  const tail = rest.join(' ').trim()
+
+  if (tail === 'off') {
+    delete notify.sounds[event]
+    notifyAudio.delete(event)
+    await saveNotify($)
+    return notifyList()
+  }
+  if (tail === 'test' || !tail) {
+    if (!notify.sounds[event]) return `✗ no ${event} sound yet. Try /sfx-notify ${event} a short alarm beep`
+    lastRing.delete(event)
+    await ring($, event)
+    return `❯ played the ${event} sound: "${notify.sounds[event]?.prompt}"`
+  }
+
+  const r = await assignNotify($, event, parseArgs(tail))
+  if (!r.ok) return `✗ ${r.error}`
+  await $.audio.play({ base64: r.base64, mime: 'audio/wav' })
+  return boxed([
+    `❯ ${event} → "${r.clip.prompt}"`,
+    r.clip.wave || FLAT,
+    `${r.clip.duration}s · plays when ${NOTIFY_HINT[event]}`,
+  ])
 }
 
 // Shared tail of /sfx and the tool: toast, play, show the pane.
@@ -314,6 +440,10 @@ export const register: Register = (on, options) => {
       if (last) await update($, dismissed, () => last.id)
     }
 
+    // module vars reset on reload, so reread notify sounds every start
+    const savedNotify = (await $.store.get(NOTIFY_KEY)) as NotifyConfig | undefined
+    if (savedNotify && typeof savedNotify === 'object') notify = { on: savedNotify.on !== false, sounds: savedNotify.sounds ?? {} }
+
     await $.command.register({
       name: 'sfx',
       description: 'Generate a sound effect from a text prompt with a local Stable Audio model',
@@ -323,13 +453,21 @@ export const register: Register = (on, options) => {
       name: 'sfx-pane',
       description: 'Show generated sound effects in a pane',
     })
+    await $.command.register({
+      name: 'sfx-notify',
+      description: 'Play custom sounds on errors, permission prompts and finished replies',
+      argumentHint: '[event] [description | test | off] or on | off',
+    })
     await $.tool.register({
       name: 'sfx',
       description:
         'Generate a sound effect from a text prompt using a local Stable Audio model (sa3.cpp). ' +
         'No API key, no Python. Returns the path to a WAV file. Use for foley and SFX: ' +
         '"metal impact with a deep sub boom", "whoosh across the screen", "footsteps on gravel". ' +
-        'Keep prompts to one sound each and layer clips for complex scenes.',
+        'Keep prompts to one sound each and layer clips for complex scenes. ' +
+        'Set notify_on to make the clip the sound played when that event happens ' +
+        '(error: a tool call failed, permission: waiting on the user, done: reply finished, ' +
+        'abort: user interrupted, compact: context compacted); notify clips default to 2s.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -338,6 +476,11 @@ export const register: Register = (on, options) => {
           seed: { type: 'number', description: 'Random seed for reproducibility' },
           steps: { type: 'number', description: 'Diffusion steps, default 8' },
           play: { type: 'boolean', description: 'Play the generated clip after writing (default true)' },
+          notify_on: {
+            type: 'string',
+            enum: [...NOTIFY_EVENTS],
+            description: 'Assign the clip as the notification sound for this event',
+          },
         },
         required: ['prompt'],
       },
@@ -353,20 +496,12 @@ export const register: Register = (on, options) => {
     if (!r.ok) return { text: `✗ ${r.error}` }
     const c = r.clip
     // command output is plain text, so draw the box with characters
-    const lines = [
-      `❯ "${c.prompt}"`,
-      c.wave || FLAT,
-      `${c.duration}s · ${c.model} · ${c.elapsed}s · ${basename(c.path)}`,
-    ]
-    const w = Math.max(...lines.map(l => l.length))
     return {
-      text: [
-        `╭${'─'.repeat(w + 2)}╮`,
-        ...lines.map(l => `│ ${l.padEnd(w)} │`),
-        `╰${'─'.repeat(w + 2)}╯`,
-      ].join('\n'),
+      text: boxed([`❯ "${c.prompt}"`, c.wave || FLAT, `${c.duration}s · ${c.model} · ${c.elapsed}s · ${basename(c.path)}`]),
     }
   })
+
+  on('command.run', { command: 'sfx-notify' }, async ($, e) => ({ text: await runNotify($, e.args) }))
 
   on('command.run', { command: 'sfx-pane' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: PANE_TITLE })
@@ -374,11 +509,37 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'mcp__sfx-gen__sfx' }, async ($, e) => {
-    const input = e as unknown as GenOpts & { play?: boolean }
-    const r = await generate($, input)
+    const input = e as unknown as GenOpts & { play?: boolean; notify_on?: string }
+    const event = isNotifyEvent(input.notify_on) ? input.notify_on : null
+    const r = event ? await assignNotify($, event, input) : await generate($, input)
     await announce($, r, input.play !== false)
     if (!r.ok) return { result: r.error }
-    return { result: `Generated ${r.clip.duration}s sound effect "${r.clip.prompt}" in ${r.clip.elapsed}s -> ${r.clip.path}` }
+    const made = `Generated ${r.clip.duration}s sound effect "${r.clip.prompt}" in ${r.clip.elapsed}s -> ${r.clip.path}`
+    return { result: event ? `${made}. It now plays when ${NOTIFY_HINT[event]}.` : made }
+  })
+
+  // Notification sounds. Each hook lets the engine run first and only listens.
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    if (r.isError) void ring($, 'error')
+    return r
+  })
+
+  on('tool.check', async ($, e, next) => {
+    const r = await next(e)
+    if (r.decision === 'ask') void ring($, 'permission')
+    return r
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    // subagent turns end all the time; only the main loop counts
+    if (!e.agentId) void ring($, e.isAborted ? 'abort' : 'done')
+    return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    void ring($, 'compact')
+    return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
