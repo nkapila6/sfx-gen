@@ -29,6 +29,10 @@ macOS / Linux:
 curl -fsSL https://raw.githubusercontent.com/nkapila6/sfx-gen/main/install.sh | bash
 ```
 
+No terminal handy? Ask your agent to install it for you: "install
+github.com/nkapila6/sfx-gen". The installer also detects OpenCode and oh-my-pi
+and wires the `sfx` tool into whichever it finds.
+
 Windows (PowerShell):
 
 ```powershell

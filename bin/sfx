@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# sfx: generate a sound effect from a text prompt with a local Stable Audio model.
+# Wraps sa3-generate from sa3.cpp. No API key, no Python.
+#
+#   sfx "a whoosh across the screen" [--duration 8] [--seed N] [--steps N] [--play] [--out FILE]
+#
+# Finds the binary and weights the sfx-gen installer laid down: ~/.claude/sa3.
+# Override with SFX_SA3_DIR or SA3_CPP_DIR. Works on macOS, Linux, and Windows (Git Bash).
+
+set -euo pipefail
+
+say() { printf '\033[32m❯\033[0m %s\n' "$*"; }
+note() { printf '  \033[2m%s\033[0m\n' "$*"; }
+die() { printf '\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+
+PROMPT=""
+DURATION="${SFX_DURATION:-8}"
+SEED=""
+STEPS=""
+PLAY=0
+OUT=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --duration|-d) DURATION="$2"; shift 2 ;;
+    --seed) SEED="$2"; shift 2 ;;
+    --steps) STEPS="$2"; shift 2 ;;
+    --play) PLAY=1; shift ;;
+    --out|-o) OUT="$2"; shift 2 ;;
+    -*) die "unknown flag: $1" ;;
+    *) PROMPT="$1"; shift ;;
+  esac
+done
+[ -n "$PROMPT" ] || die "usage: sfx \"<description>\" [--duration N] [--seed N] [--steps N] [--play] [--out FILE]"
+
+DIR="${SFX_SA3_DIR:-${SA3_CPP_DIR:-$HOME/.claude/sa3}}"
+MODEL="${SFX_MODEL:-small-sfx}"
+ENC="${SFX_ENCODING:-q5_k_m}"
+
+for EXE in "$DIR/build/bin/sa3-generate" "$DIR/build-metal/bin/sa3-generate" "$DIR/build/bin/sa3-generate.exe"; do
+  [ -f "$EXE" ] && break
+done
+[ -f "$EXE" ] || die "sa3-generate not found under $DIR. Run the sfx-gen installer:
+  curl -fsSL https://raw.githubusercontent.com/nkapila6/sfx-gen/main/install.sh | bash"
+MODELS="$DIR/models"
+[ -d "$MODELS" ] || die "models dir not found: $MODELS. Run the installer or sa3.cpp's models.sh"
+
+[ -n "$OUT" ] || OUT="$(mktemp -d)/sfx-$(date +%s).wav"
+mkdir -p "$(dirname "$OUT")"
+
+say "generating ${DURATION}s with $MODEL: \"$PROMPT\""
+ARGS=(--model "$MODEL" --encoding "$ENC" --models-dir "$MODELS" --prompt "$PROMPT" --duration "$DURATION" --out "$OUT")
+[ -n "$SEED" ] && ARGS+=(--seed "$SEED")
+[ -n "$STEPS" ] && ARGS+=(--steps "$STEPS")
+START=$(date +%s)
+if ! ERR=$("$EXE" "${ARGS[@]}" 2>&1 >/dev/null); then
+  printf '%s\n' "$ERR" | tail -3 >&2
+  die "sa3-generate failed"
+fi
+TOOK=$(( $(date +%s) - START ))
+[ -f "$OUT" ] || die "sa3-generate exited 0 but no file at $OUT"
+
+printf '\n\033[32m❯\033[0m "%s"\n' "$PROMPT"
+printf '  \033[32m%s\033[0m\n' "$DURATION seconds · wrote in ${TOOK}s"
+printf '  %s\n' "$OUT"
+if [ "$PLAY" = 1 ]; then
+  case "$(uname -s)" in
+    Darwin) afplay "$OUT" ;;
+    *) command -v ffplay >/dev/null && ffplay -nodisp -autoexit -loglevel quiet "$OUT" || note "no player found; open $OUT by hand" ;;
+  esac
+fi
