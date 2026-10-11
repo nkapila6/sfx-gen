@@ -6,6 +6,8 @@ export type Clip = {
   elapsed: string
   model: string
   at: number
+  // unicode sparkline of the clip's loudness, cached so the pane needn't reread the wav
+  wave?: string
 }
 
 export type Pending = { prompt: string; duration: number; model: string; device: string }

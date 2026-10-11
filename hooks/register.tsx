@@ -39,6 +39,10 @@ type GenResult =
   | { ok: true; clip: Clip; base64: string }
   | { ok: false; error: string }
 
+const ACCENT = 'green'
+const WAVE_WIDTH = 32
+const FLAT = '·'.repeat(WAVE_WIDTH)
+
 function pickBinary(root: string) {
   return root ? root + '/build-metal/bin/sa3-generate' : ''
 }
@@ -64,6 +68,76 @@ function errText(err: unknown) {
 
 function slug(text: string) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'sfx'
+}
+
+function basename(path: string) {
+  return path.split('/').pop() ?? path
+}
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const BARS = '▁▂▃▄▅▆▇█'
+
+// No atob or Buffer in the module sandbox, so decode by hand.
+function fromBase64(b64: string) {
+  const clean = b64.replace(/[^A-Za-z0-9+/]/g, '')
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4))
+  let o = 0
+  for (let i = 0; i < clean.length; i += 4) {
+    const n =
+      (B64.indexOf(clean.charAt(i)) << 18) |
+      (B64.indexOf(clean.charAt(i + 1)) << 12) |
+      ((B64.indexOf(clean[i + 2] ?? 'A') & 63) << 6) |
+      (B64.indexOf(clean[i + 3] ?? 'A') & 63)
+    if (o < out.length) out[o++] = (n >> 16) & 255
+    if (o < out.length) out[o++] = (n >> 8) & 255
+    if (o < out.length) out[o++] = n & 255
+  }
+  return out
+}
+
+// Peak per bucket from a PCM16 or float32 wav, drawn as block characters.
+function waveform(b64: string, width = WAVE_WIDTH) {
+  try {
+    const buf = fromBase64(b64)
+    const dv = new DataView(buf.buffer)
+    let fmt = 1
+    let bits = 16
+    let pos = 12
+    let data = -1
+    let size = 0
+    while (pos + 8 <= buf.length) {
+      const id = String.fromCharCode(dv.getUint8(pos), dv.getUint8(pos + 1), dv.getUint8(pos + 2), dv.getUint8(pos + 3))
+      const len = dv.getUint32(pos + 4, true)
+      if (id === 'fmt ') {
+        fmt = dv.getUint16(pos + 8, true)
+        bits = dv.getUint16(pos + 22, true)
+      } else if (id === 'data') {
+        data = pos + 8
+        size = Math.min(len, buf.length - data)
+        break
+      }
+      pos += 8 + len + (len & 1)
+    }
+    if (data < 0 || (bits !== 16 && !(fmt === 3 && bits === 32))) return ''
+    const step = bits / 8
+    const count = Math.floor(size / step)
+    const per = Math.max(1, Math.floor(count / width))
+    const peaks: number[] = []
+    for (let b = 0; b < width; b++) {
+      let peak = 0
+      // stride through the bucket, a sparkline doesn't need every sample
+      for (let i = b * per; i < (b + 1) * per && i < count; i += 16) {
+        const at = data + i * step
+        const v = bits === 16 ? dv.getInt16(at, true) / 32768 : dv.getFloat32(at, true)
+        peak = Math.max(peak, Math.abs(v))
+      }
+      peaks.push(peak)
+    }
+    const max = Math.max(...peaks) || 1
+    return peaks.map(p => BARS[Math.min(7, Math.floor((p / max) * 7.99))]).join('')
+  } catch {
+    return ''
+  }
 }
 
 async function firstExisting($: Engine, paths: string[]) {
@@ -147,7 +221,7 @@ async function generate($: Engine, opts: GenOpts): Promise<GenResult> {
     }
 
     const elapsed = ((Date.now() - started) / 1000).toFixed(1)
-    const clip: Clip = { id, prompt, path: outPath, duration, elapsed, model, at: started }
+    const clip: Clip = { id, prompt, path: outPath, duration, elapsed, model, at: started, wave: waveform(bytes.base64) }
     await addClip($, clip)
     return { ok: true, clip, base64: bytes.base64 }
   } finally {
@@ -176,7 +250,6 @@ async function playClip($: Engine, clip: Clip) {
   }
 }
 
-// WhatsApp treats audio-only mp4 as a document, so render a waveform video track.
 async function shareClip($: Engine, clip: Clip) {
   const ffmpeg = await firstExisting($, ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg'])
   if (!ffmpeg) {
@@ -189,21 +262,12 @@ async function shareClip($: Engine, clip: Clip) {
   }
 
   const home = await $.env.get('HOME')
-  const out = `${home}/Downloads/sfx-${slug(clip.prompt)}-${clip.id}.mp4`
-  $.ui.toast('sfx-gen: converting to mp4...')
+  const out = `${home}/Downloads/sfx-${slug(clip.prompt)}-${clip.id}.mp3`
+  $.ui.toast('sfx-gen: converting to mp3...')
 
   try {
     const run = await $.process.run(
-      [
-        ffmpeg, '-y', '-loglevel', 'error',
-        '-i', clip.path,
-        '-filter_complex', '[0:a]showwaves=s=720x720:mode=cline:colors=white,format=yuv420p[v]',
-        '-map', '[v]', '-map', '0:a',
-        '-c:v', 'libx264', '-preset', 'veryfast',
-        '-c:a', 'aac', '-b:a', '192k',
-        '-movflags', '+faststart',
-        out,
-      ],
+      [ffmpeg, '-y', '-loglevel', 'error', '-i', clip.path, '-codec:a', 'libmp3lame', '-q:a', '2', out],
       { timeoutMs: 120000 },
     )
     if (run.exitCode !== 0) {
@@ -215,7 +279,7 @@ async function shareClip($: Engine, clip: Clip) {
     return
   }
 
-  // A file reference on the clipboard pastes as an attachment in WhatsApp desktop.
+  // A file reference on the clipboard pastes as an attachment in chat apps.
   let copied = false
   try {
     const cp = await $.process.run([
@@ -228,8 +292,8 @@ async function shareClip($: Engine, clip: Clip) {
     copied = cp.exitCode === 0
   } catch {}
 
-  const where = '~/Downloads/' + out.split('/').pop()
-  $.ui.toast(copied ? `mp4 saved to ${where} and copied. Paste it into WhatsApp.` : `mp4 saved to ${where}`)
+  const where = '~/Downloads/' + basename(out)
+  $.ui.toast(copied ? `mp3 saved to ${where} and copied to the clipboard` : `mp3 saved to ${where}`)
 }
 
 export const register: Register = (on, options) => {
@@ -283,11 +347,25 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'sfx' }, async ($, e) => {
     const a = parseArgs(e.args)
-    if (!a.prompt) return { text: 'Usage: /sfx <description> [--duration N] [--seed N]' }
+    if (!a.prompt) return { text: 'usage  /sfx <description> [--duration N] [--seed N]' }
     const r = await generate($, a)
     await announce($, r, true)
-    if (!r.ok) return { text: 'sfx-gen: ' + r.error }
-    return { text: `sfx-gen: generated ${r.clip.duration}s in ${r.clip.elapsed}s -> ${r.clip.path}\n  "${r.clip.prompt}"` }
+    if (!r.ok) return { text: `✗ ${r.error}` }
+    const c = r.clip
+    // command output is plain text, so draw the box with characters
+    const lines = [
+      `❯ "${c.prompt}"`,
+      c.wave || FLAT,
+      `${c.duration}s · ${c.model} · ${c.elapsed}s · ${basename(c.path)}`,
+    ]
+    const w = Math.max(...lines.map(l => l.length))
+    return {
+      text: [
+        `╭${'─'.repeat(w + 2)}╮`,
+        ...lines.map(l => `│ ${l.padEnd(w)} │`),
+        `╰${'─'.repeat(w + 2)}╯`,
+      ].join('\n'),
+    }
   })
 
   on('command.run', { command: 'sfx-pane' }, async $ => {
@@ -307,27 +385,44 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = (await read($, clips)) ?? []
     const now = await read($, pending)
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 6)
+    // each clip card is 5 rows tall with its border
+    const room = Math.max(1, Math.floor(((e.viewport?.rows ?? 24) - 6) / 5))
     const recent = list.slice(-room).reverse()
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
+        <Box justifyContent="space-between">
+          <Text color={ACCENT} bold>~/sfx</Text>
+          <Text dimColor>
+            {list.length} clips · {config.model}
+          </Text>
+        </Box>
         {now && (
-          <Text color="yellow">
-            generating {now.duration}s "{now.prompt}" with {now.model}...
+          <Box borderStyle="single" borderColor="yellow" paddingX={1}>
+            <Text color="yellow" wrap="truncate-end">
+              [gen] {now.duration}s "{now.prompt}"...
+            </Text>
+          </Box>
+        )}
+        {list.length === 0 && !now && (
+          <Text dimColor>
+            <Text color={ACCENT}>$ </Text>/sfx a whoosh across the screen
           </Text>
         )}
-        {list.length === 0 && !now && <Text dimColor>No clips yet. Try /sfx a whoosh across the screen</Text>}
         {recent.map(clip => (
-          <Box key={'row-' + clip.id} flexDirection="column" marginBottom={1}>
-            <Text wrap="truncate-end">{clip.prompt}</Text>
+          <Box key={'row-' + clip.id} flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+            <Text wrap="truncate-end">
+              <Text color={ACCENT}>❯ </Text>
+              <Text bold>{clip.prompt}</Text>
+            </Text>
+            <Text color={ACCENT}>{clip.wave || FLAT}</Text>
             <Box>
               <Text dimColor>
-                {clip.duration}s, made in {clip.elapsed}s{' '}
+                {clip.duration}s · {clip.elapsed}s{'  '}
               </Text>
-              <Button key={'play-' + clip.id} label="Play" onPress={() => void playClip($, clip)} />
+              <Button key={'play-' + clip.id} label="▶ play" onPress={() => void playClip($, clip)} />
               <Text> </Text>
-              <Button key={'share-' + clip.id} label="Share mp4" onPress={() => void shareClip($, clip)} />
+              <Button key={'share-' + clip.id} label="⇪ mp3" onPress={() => void shareClip($, clip)} />
             </Box>
           </Box>
         ))}
@@ -342,9 +437,9 @@ export const register: Register = (on, options) => {
     const now = await read($, pending)
     if (now) {
       return (
-        <Box>
-          <Text color="yellow">
-            sfx: generating {now.duration}s "{now.prompt}" with {now.model} ({now.device})...
+        <Box borderStyle="round" borderColor="yellow" paddingX={1}>
+          <Text color="yellow" wrap="truncate-end">
+            [gen] {now.duration}s "{now.prompt}" · {now.model} ({now.device})...
           </Text>
         </Box>
       )
@@ -355,13 +450,15 @@ export const register: Register = (on, options) => {
     if (!last || (await read($, dismissed)) === last.id) return next(e)
 
     return (
-      <Box>
-        <Text wrap="truncate-end">sfx: "{last.prompt}" {last.duration}s </Text>
-        <Button key="play" label="Play" onPress={() => void playClip($, last)} />
+      <Box borderStyle="round" borderColor={ACCENT} paddingX={1}>
+        <Text wrap="truncate-end">
+          <Text color={ACCENT}>❯ </Text>"{last.prompt}" <Text color={ACCENT}>{last.wave || FLAT}</Text>{' '}
+        </Text>
+        <Button key="play" label="▶ play" onPress={() => void playClip($, last)} />
         <Text> </Text>
-        <Button key="share" label="Share mp4" onPress={() => void shareClip($, last)} />
+        <Button key="share" label="⇪ mp3" onPress={() => void shareClip($, last)} />
         <Text> </Text>
-        <Button key="dismiss" label="Dismiss" role="dismiss" onPress={() => void update($, dismissed, () => last.id)} />
+        <Button key="dismiss" label="✕" role="dismiss" onPress={() => void update($, dismissed, () => last.id)} />
       </Box>
     )
   })
