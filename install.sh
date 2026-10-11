@@ -24,7 +24,7 @@ die() { printf '%s✗%s %s\n' "$red" "$off" "$*" >&2; exit 1; }
 
 # Wrapped in main so a half-downloaded script never runs.
 main() {
-  local os pkg url sums sha
+  local os pkg url sums sha tmp ref
   case "$(uname -s)" in
     Darwin)
       os=mac
@@ -56,12 +56,15 @@ main() {
   # the mod looks for sa3-generate under <sa3_dir>/build/bin and weights under <sa3_dir>/models
   local bin="$SA3_HOME/build/bin"
 
+  # always create the staging dir, even when sa3 is already installed, so the
+  # wrapper/skill/tool staging below has a place to land
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "${tmp:-}"' EXIT
+
   if [ -x "$bin/sa3-generate" ] && grep -q "\"$SA3_VERSION\"" "$bin/BUILD-INFO.json" 2>/dev/null; then
     say "sa3.cpp $SA3_VERSION already installed"
   else
     say "downloading sa3.cpp $SA3_VERSION for $os (prebuilt, a few MB)"
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "${tmp:-}"' EXIT
     curl -fsSL -o "$tmp/$pkg" "$url/$pkg"
     curl -fsSL -o "$tmp/SHA256SUMS" "$url/$sums"
     (cd "$tmp" && grep " $pkg\$" SHA256SUMS | $sha -c - >/dev/null) || die "checksum mismatch on $pkg, not installing it"
@@ -91,9 +94,8 @@ main() {
 
   # stage the CLI wrapper and integrations for the steps below. raw's CDN can
   # lag behind main right after a push, so pin to the exact commit sha.
-  local sha
   sha="$(curl -fsSL "https://api.github.com/repos/$REPO/commits/main" 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4 || true)"
-  local ref="main"
+  ref="main"
   [ -n "$sha" ] && ref="$sha"
   mkdir -p "$tmp/wrapper" "$tmp/integrations"
   curl -fsSL -o "$tmp/wrapper/sfx" "https://raw.githubusercontent.com/$REPO/$ref/bin/sfx"
